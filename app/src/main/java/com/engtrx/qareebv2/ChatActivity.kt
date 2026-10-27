@@ -1,12 +1,16 @@
 package com.engtrx.qareebv2
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
 import android.content.ContentValues
+import android.content.pm.PackageManager
 import android.graphics.Color
-import android.net.Uri
+import android.graphics.drawable.GradientDrawable
+import android.media.MediaPlayer
+import android.media.MediaRecorder
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -20,6 +24,8 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -28,10 +34,10 @@ import java.util.UUID
 class ChatActivity : AppCompatActivity() {
 
     private var bluetoothAdapter: BluetoothAdapter? = null
-    private lateinit var chatTextView: TextView
+    private lateinit var chatLayout: LinearLayout
     private lateinit var inputEditText: EditText
     private lateinit var sendButton: Button
-    private lateinit var attachButton: Button
+    private lateinit var micButton: Button
     private lateinit var scrollView: ScrollView
 
     private var bluetoothSocket: BluetoothSocket? = null
@@ -39,11 +45,15 @@ class ChatActivity : AppCompatActivity() {
     private var inputStream: InputStream? = null
     private var isConnected = false
 
+    private var mediaRecorder: MediaRecorder? = null
+    private var isRecording = false
+    private var audioFile: File? = null
+
     private val MY_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
-    // لاختيار الملفات والصور والصوتيات
-    private val getContent = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        if (uri != null) sendFile(uri)
+    private val requestAudioPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+        if (isGranted) toggleRecording()
+        else Toast.makeText(this, "يجب السماح بالوصول للميكروفون", Toast.LENGTH_SHORT).show()
     }
 
     @SuppressLint("MissingPermission")
@@ -52,47 +62,44 @@ class ChatActivity : AppCompatActivity() {
 
         val deviceAddress = intent.getStringExtra("DEVICE_ADDRESS")
         val deviceName = intent.getStringExtra("DEVICE_NAME") ?: "جهاز"
+        val isServer = intent.getBooleanExtra("IS_SERVER", false)
 
-        val layout = LinearLayout(this).apply {
+        val mainLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#F5F5F5"))
+            setBackgroundColor(Color.parseColor("#ECE5DD"))
         }
 
         val title = TextView(this).apply {
-            text = "محادثة مع: $deviceName"
+            text = deviceName
             textSize = 20f
             setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#0088cc"))
+            setBackgroundColor(Color.parseColor("#075E54"))
             setPadding(30, 40, 30, 40)
             textAlignment = TextView.TEXT_ALIGNMENT_CENTER
         }
 
-        chatTextView = TextView(this).apply {
-            textSize = 16f
-            setTextColor(Color.BLACK)
-            setPadding(30, 30, 30, 30)
+        chatLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(20, 20, 20, 20)
         }
 
         scrollView = ScrollView(this).apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
-            addView(chatTextView)
+            addView(chatLayout)
         }
 
         val inputLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(10, 20, 10, 20)
+            setPadding(10, 10, 10, 10)
             setBackgroundColor(Color.WHITE)
         }
 
-        attachButton = Button(this).apply {
-            text = "+"
-            textSize = 22f
+        micButton = Button(this).apply {
+            text = "تسجيل"
+            textSize = 14f
             setBackgroundColor(Color.parseColor("#E0E0E0"))
             setTextColor(Color.BLACK)
-            setOnClickListener { 
-                // يفتح مدير الملفات لاختيار صور أو صوتيات
-                getContent.launch("*/*") 
-            }
+            setOnClickListener { checkAudioPermissionAndRecord() }
         }
 
         inputEditText = EditText(this).apply {
@@ -102,68 +109,79 @@ class ChatActivity : AppCompatActivity() {
 
         sendButton = Button(this).apply {
             text = "إرسال"
-            setBackgroundColor(Color.parseColor("#0088cc"))
+            setBackgroundColor(Color.parseColor("#128C7E"))
             setTextColor(Color.WHITE)
             setOnClickListener { sendMessage() }
         }
 
-        inputLayout.addView(attachButton)
+        inputLayout.addView(micButton)
         inputLayout.addView(inputEditText)
         inputLayout.addView(sendButton)
-        layout.addView(title)
-        layout.addView(scrollView)
-        layout.addView(inputLayout)
-        setContentView(layout)
+        mainLayout.addView(title)
+        mainLayout.addView(scrollView)
+        mainLayout.addView(inputLayout)
+        setContentView(mainLayout)
 
         if (deviceAddress != null) {
-            connectToDevice(deviceAddress)
-        } else {
-            appendMessage("خطأ: لم يتم العثور على عنوان الجهاز.")
+            connectToDevice(deviceAddress, isServer)
         }
     }
 
     @SuppressLint("MissingPermission")
-    private fun connectToDevice(address: String) {
+    private fun connectToDevice(address: String, isServer: Boolean) {
         bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
-        val device: BluetoothDevice = bluetoothAdapter!!.getRemoteDevice(address)
-        appendMessage("جاري الاتصال...")
-
-        Thread {
-            try {
-                bluetoothAdapter?.cancelDiscovery()
-                bluetoothSocket = device.createRfcommSocketToServiceRecord(MY_UUID)
-                bluetoothSocket?.connect()
-                outputStream = bluetoothSocket?.outputStream
-                inputStream = bluetoothSocket?.inputStream
-                isConnected = true
-
-                runOnUiThread { appendMessage("تم الاتصال بنجاح!") }
-                listenForMessages()
-            } catch (e: IOException) {
-                runOnUiThread { appendMessage("فشل الاتصال. تأكد أن الجهاز الآخر فتح التطبيق.") }
-                try { bluetoothSocket?.close() } catch (ex: IOException) {}
-            }
-        }.start()
+        
+        if (!isServer) {
+            val device: BluetoothDevice = bluetoothAdapter!!.getRemoteDevice(address)
+            addMessageBubble("جاري الاتصال...", false)
+            Thread {
+                try {
+                    bluetoothAdapter?.cancelDiscovery()
+                    bluetoothSocket = device.createRfcommSocketToServiceRecord(MY_UUID)
+                    bluetoothSocket?.connect()
+                    outputStream = bluetoothSocket?.outputStream
+                    inputStream = bluetoothSocket?.inputStream
+                    isConnected = true
+                    runOnUiThread { addMessageBubble("تم الاتصال بنجاح!", false) }
+                    listenForMessages()
+                } catch (e: IOException) {
+                    runOnUiThread { addMessageBubble("فشل الاتصال.", false) }
+                }
+            }.start()
+        } else {
+            val device: BluetoothDevice = bluetoothAdapter!!.getRemoteDevice(address)
+            Thread {
+                try {
+                    bluetoothSocket = device.createRfcommSocketToServiceRecord(MY_UUID)
+                    bluetoothSocket?.connect()
+                    outputStream = bluetoothSocket?.outputStream
+                    inputStream = bluetoothSocket?.inputStream
+                    isConnected = true
+                    runOnUiThread { addMessageBubble("تم الاتصال (مستقبل)!", false) }
+                    listenForMessages()
+                } catch (e: IOException) {
+                    runOnUiThread { addMessageBubble("فشل الاتصال كخادم.", false) }
+                }
+            }.start()
+        }
     }
 
     private fun listenForMessages() {
-        val buffer = ByteArray(8192) // مخزن أكبر للملفات
+        val buffer = ByteArray(16384) 
         var bytes: Int
         while (isConnected) {
             try {
                 bytes = inputStream?.read(buffer) ?: 0
                 if (bytes > 0) {
                     val rawMessage = String(buffer, 0, bytes)
-                    
                     if (rawMessage.startsWith("FILE|")) {
                         handleIncomingFile(rawMessage)
                     } else {
-                        runOnUiThread { appendMessage("الطرف الآخر: $rawMessage") }
+                        runOnUiThread { addMessageBubble(rawMessage, false) }
                     }
                 }
             } catch (e: IOException) {
                 isConnected = false
-                runOnUiThread { appendMessage("انقطع الاتصال.") }
                 break
             }
         }
@@ -175,60 +193,75 @@ class ChatActivity : AppCompatActivity() {
             try {
                 outputStream?.write(message.toByteArray())
                 runOnUiThread {
-                    appendMessage("أنت: $message")
+                    addMessageBubble(message, true)
                     inputEditText.text.clear()
                 }
-            } catch (e: IOException) {
-                appendMessage("فشل الإرسال.")
-            }
+            } catch (e: IOException) {}
         }
     }
 
-    // دالة إرسال الملفات والصور
-    private fun sendFile(uri: Uri) {
-        if (!isConnected) {
-            Toast.makeText(this, "غير متصل", Toast.LENGTH_SHORT).show()
-            return
+    private fun checkAudioPermissionAndRecord() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            toggleRecording()
+        } else {
+            requestAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
         }
-        
+    }
+
+    private fun toggleRecording() {
+        if (isRecording) {
+            try {
+                mediaRecorder?.stop()
+                mediaRecorder?.release()
+                mediaRecorder = null
+                isRecording = false
+                micButton.text = "تسجيل"
+                Toast.makeText(this, "تم التسجيل، جاري الإرسال...", Toast.LENGTH_SHORT).show()
+                sendAudioFile()
+            } catch (e: Exception) {
+                Toast.makeText(this, "فشل التسجيل", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            val file = File(externalCacheDir, "voice.3gp")
+            mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                MediaRecorder(this)
+            } else {
+                @Suppress("DEPRECATION") MediaRecorder()
+            }.apply {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+                setOutputFile(file.absolutePath)
+                prepare()
+                start()
+            }
+            audioFile = file
+            isRecording = true
+            micButton.text = "إيقاف"
+            Toast.makeText(this, "جاري التسجيل... اضغط مجدداً للإيقاف", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun sendAudioFile() {
+        if (!isConnected || audioFile == null || !audioFile!!.exists()) return
         try {
-            val inputStream = contentResolver.openInputStream(uri)
-            val bytes = inputStream?.readBytes()
-            
-            if (bytes != null) {
-                if (bytes.size > 1.5 * 1024 * 1024) { // حد أقصى 1.5 ميجابايت للبلوتوث
-                    Toast.makeText(this, "الملف كبير جداً (الحد 1.5MB)", Toast.LENGTH_LONG).show()
-                    return
-                }
-
-                // استخراج اسم الملف
-                var fileName = "ملف_مرسل"
-                contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                    val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    if (nameIndex != -1 && cursor.moveToFirst()) {
-                        fileName = cursor.getString(nameIndex)
-                    }
-                }
-
-                // تحويل الملف إلى نص Base64 لإرساله
-                val base64Data = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                val fileMessage = "FILE|$fileName|$base64Data"
-
-                Thread {
-                    try {
-                        outputStream?.write(fileMessage.toByteArray())
-                        runOnUiThread { appendMessage("أنت: أرسلت ($fileName)") }
-                    } catch (e: IOException) {
-                        runOnUiThread { appendMessage("فشل إرسال الملف.") }
-                    }
-                }.start()
+            val bytes = audioFile!!.readBytes()
+            if (bytes.size > 1.5 * 1024 * 1024) {
+                Toast.makeText(this, "الملف الصوتي كبير جداً", Toast.LENGTH_SHORT).show()
+                return
             }
-        } catch (e: Exception) {
-            Toast.makeText(this, "خطأ في قراءة الملف", Toast.LENGTH_SHORT).show()
-        }
+            val base64Data = Base64.encodeToString(bytes, Base64.NO_WRAP)
+            val fileMessage = "FILE|voice.3gp|$base64Data"
+            
+            Thread {
+                try {
+                    outputStream?.write(fileMessage.toByteArray())
+                    runOnUiThread { addMessageBubble("رسالة صوتية", true) }
+                } catch (e: IOException) {}
+            }.start()
+        } catch (e: Exception) {}
     }
 
-    // دالة استقبال الملفات وحفظها في التنزيلات
     private fun handleIncomingFile(message: String) {
         try {
             val parts = message.split("|")
@@ -237,34 +270,70 @@ class ChatActivity : AppCompatActivity() {
                 val base64Data = parts[2]
                 val fileBytes = Base64.decode(base64Data, Base64.DEFAULT)
 
-                // حفظ في مجلد التنزيلات
-                val resolver = contentResolver
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, "Qareeb_$fileName")
-                    put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                }
-                
-                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
-                if (uri != null) {
-                    val os = resolver.openOutputStream(uri)
-                    os?.write(fileBytes)
-                    os?.close()
-                    runOnUiThread { appendMessage("الطرف الآخر: أرسل ($fileName)\nتم حفظه في التنزيلات.") }
+                if (fileName == "voice.3gp") {
+                    val tempFile = File(externalCacheDir, "received_voice.3gp")
+                    tempFile.writeBytes(fileBytes)
+                    runOnUiThread {
+                        addMessageBubble("رسالة صوتية (اضغط للتشغيل)", false)
+                        playAudio(tempFile)
+                    }
+                } else {
+                    val resolver = contentResolver
+                    val contentValues = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, "Qareeb_$fileName")
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    }
+                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+                    uri?.let {
+                        val os = resolver.openOutputStream(it)
+                        os?.write(fileBytes)
+                        os?.close()
+                        runOnUiThread { addMessageBubble("ملف: $fileName", false) }
+                    }
                 }
             }
+        } catch (e: Exception) {}
+    }
+
+    private fun playAudio(file: File) {
+        try {
+            val player = MediaPlayer()
+            player.setDataSource(file.absolutePath)
+            player.prepare()
+            player.start()
         } catch (e: Exception) {
-            runOnUiThread { appendMessage("خطأ في استقبال الملف.") }
+            Toast.makeText(this, "خطأ في تشغيل الصوت", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun appendMessage(message: String) {
-        chatTextView.append("$message\n\n")
+    private fun addMessageBubble(text: String, isMine: Boolean) {
+        val bubble = TextView(this).apply {
+            this.text = text
+            textSize = 16f
+            setTextColor(Color.BLACK) // النص دائماً أسود
+            setPadding(30, 20, 30, 20)
+            
+            val bg = GradientDrawable().apply {
+                setColor(if (isMine) Color.parseColor("#DCF8C6") else Color.WHITE)
+                cornerRadius = 30f
+            }
+            background = bg
+
+            val params = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            params.setMargins(0, 10, 0, 10)
+            params.gravity = if (isMine) android.view.Gravity.END else android.view.Gravity.START
+            layoutParams = params
+        }
+        chatLayout.addView(bubble)
         scrollView.post { scrollView.fullScroll(ScrollView.FOCUS_DOWN) }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         try { bluetoothSocket?.close() } catch (e: IOException) {}
+        mediaRecorder?.release()
     }
 }
