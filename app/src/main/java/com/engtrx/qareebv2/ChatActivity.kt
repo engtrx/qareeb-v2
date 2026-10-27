@@ -11,6 +11,7 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.media.MediaPlayer
 import android.media.MediaRecorder
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -33,11 +34,16 @@ import java.util.UUID
 
 class ChatActivity : AppCompatActivity() {
 
+    companion object {
+        var serverSocket: BluetoothSocket? = null // لاستقبال الاتصال من MainActivity
+    }
+
     private var bluetoothAdapter: BluetoothAdapter? = null
     private lateinit var chatLayout: LinearLayout
     private lateinit var inputEditText: EditText
     private lateinit var sendButton: Button
     private lateinit var micButton: Button
+    private lateinit var attachButton: Button
     private lateinit var scrollView: ScrollView
 
     private var bluetoothSocket: BluetoothSocket? = null
@@ -54,6 +60,10 @@ class ChatActivity : AppCompatActivity() {
     private val requestAudioPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
         if (isGranted) toggleRecording()
         else Toast.makeText(this, "يجب السماح بالوصول للميكروفون", Toast.LENGTH_SHORT).show()
+    }
+
+    private val getContent = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null) sendFile(uri)
     }
 
     @SuppressLint("MissingPermission")
@@ -90,13 +100,23 @@ class ChatActivity : AppCompatActivity() {
 
         val inputLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(10, 10, 10, 10)
+            setPadding(5, 10, 5, 10)
             setBackgroundColor(Color.WHITE)
         }
 
+        // زر الوسائط (+)
+        attachButton = Button(this).apply {
+            text = "+"
+            textSize = 20f
+            setBackgroundColor(Color.parseColor("#E0E0E0"))
+            setTextColor(Color.BLACK)
+            setOnClickListener { getContent.launch("*/*") }
+        }
+
+        // زر الميكروفون (أيقونة أندرويد قياسية)
         micButton = Button(this).apply {
-            text = "تسجيل"
-            textSize = 14f
+            text = "صوت" // سنستخدم نص بدلاً من الإيموجي
+            textSize = 12f
             setBackgroundColor(Color.parseColor("#E0E0E0"))
             setTextColor(Color.BLACK)
             setOnClickListener { checkAudioPermissionAndRecord() }
@@ -114,6 +134,7 @@ class ChatActivity : AppCompatActivity() {
             setOnClickListener { sendMessage() }
         }
 
+        inputLayout.addView(attachButton)
         inputLayout.addView(micButton)
         inputLayout.addView(inputEditText)
         inputLayout.addView(sendButton)
@@ -122,47 +143,47 @@ class ChatActivity : AppCompatActivity() {
         mainLayout.addView(inputLayout)
         setContentView(mainLayout)
 
-        if (deviceAddress != null) {
-            connectToDevice(deviceAddress, isServer)
+        // إصلاح الاتصال: إذا كنا خادم، نستخدم الـ Socket الذي أتى من MainActivity
+        if (isServer) {
+            bluetoothSocket = serverSocket
+            if (bluetoothSocket != null) {
+                setupStreams()
+                addMessageBubble("تم الاتصال (مستقبل)!", false)
+            } else {
+                addMessageBubble("خطأ: لم يتم استلام الاتصال.", false)
+            }
+        } else if (deviceAddress != null) {
+            connectToDevice(deviceAddress)
         }
     }
 
     @SuppressLint("MissingPermission")
-    private fun connectToDevice(address: String, isServer: Boolean) {
+    private fun connectToDevice(address: String) {
         bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+        val device: BluetoothDevice = bluetoothAdapter!!.getRemoteDevice(address)
+        addMessageBubble("جاري الاتصال...", false)
         
-        if (!isServer) {
-            val device: BluetoothDevice = bluetoothAdapter!!.getRemoteDevice(address)
-            addMessageBubble("جاري الاتصال...", false)
-            Thread {
-                try {
-                    bluetoothAdapter?.cancelDiscovery()
-                    bluetoothSocket = device.createRfcommSocketToServiceRecord(MY_UUID)
-                    bluetoothSocket?.connect()
-                    outputStream = bluetoothSocket?.outputStream
-                    inputStream = bluetoothSocket?.inputStream
-                    isConnected = true
-                    runOnUiThread { addMessageBubble("تم الاتصال بنجاح!", false) }
-                    listenForMessages()
-                } catch (e: IOException) {
-                    runOnUiThread { addMessageBubble("فشل الاتصال.", false) }
-                }
-            }.start()
-        } else {
-            val device: BluetoothDevice = bluetoothAdapter!!.getRemoteDevice(address)
-            Thread {
-                try {
-                    bluetoothSocket = device.createRfcommSocketToServiceRecord(MY_UUID)
-                    bluetoothSocket?.connect()
-                    outputStream = bluetoothSocket?.outputStream
-                    inputStream = bluetoothSocket?.inputStream
-                    isConnected = true
-                    runOnUiThread { addMessageBubble("تم الاتصال (مستقبل)!", false) }
-                    listenForMessages()
-                } catch (e: IOException) {
-                    runOnUiThread { addMessageBubble("فشل الاتصال كخادم.", false) }
-                }
-            }.start()
+        Thread {
+            try {
+                bluetoothAdapter?.cancelDiscovery()
+                bluetoothSocket = device.createRfcommSocketToServiceRecord(MY_UUID)
+                bluetoothSocket?.connect()
+                setupStreams()
+                runOnUiThread { addMessageBubble("تم الاتصال بنجاح!", false) }
+            } catch (e: IOException) {
+                runOnUiThread { addMessageBubble("فشل الاتصال. تأكد من أن الهاتف الآخر فتح التطبيق.", false) }
+            }
+        }.start()
+    }
+
+    private fun setupStreams() {
+        try {
+            outputStream = bluetoothSocket?.outputStream
+            inputStream = bluetoothSocket?.inputStream
+            isConnected = true
+            listenForMessages()
+        } catch (e: IOException) {
+            isConnected = false
         }
     }
 
@@ -215,7 +236,7 @@ class ChatActivity : AppCompatActivity() {
                 mediaRecorder?.release()
                 mediaRecorder = null
                 isRecording = false
-                micButton.text = "تسجيل"
+                micButton.text = "صوت"
                 Toast.makeText(this, "تم التسجيل، جاري الإرسال...", Toast.LENGTH_SHORT).show()
                 sendAudioFile()
             } catch (e: Exception) {
@@ -262,6 +283,28 @@ class ChatActivity : AppCompatActivity() {
         } catch (e: Exception) {}
     }
 
+    private fun sendFile(uri: Uri) {
+        if (!isConnected) return
+        try {
+            val inputStream = contentResolver.openInputStream(uri)
+            val bytes = inputStream?.readBytes()
+            if (bytes != null) {
+                if (bytes.size > 1.5 * 1024 * 1024) {
+                    Toast.makeText(this, "الملف كبير جداً (الحد 1.5MB)", Toast.LENGTH_LONG).show()
+                    return
+                }
+                val base64Data = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                val fileMessage = "FILE|ملف_مرسل|$base64Data"
+                Thread {
+                    try {
+                        outputStream?.write(fileMessage.toByteArray())
+                        runOnUiThread { addMessageBubble("أنت: أرسلت ملف", true) }
+                    } catch (e: IOException) {}
+                }.start()
+            }
+        } catch (e: Exception) {}
+    }
+
     private fun handleIncomingFile(message: String) {
         try {
             val parts = message.split("|")
@@ -274,7 +317,7 @@ class ChatActivity : AppCompatActivity() {
                     val tempFile = File(externalCacheDir, "received_voice.3gp")
                     tempFile.writeBytes(fileBytes)
                     runOnUiThread {
-                        addMessageBubble("رسالة صوتية (اضغط للتشغيل)", false)
+                        addMessageBubble("رسالة صوتية", false)
                         playAudio(tempFile)
                     }
                 } else {
@@ -310,7 +353,7 @@ class ChatActivity : AppCompatActivity() {
         val bubble = TextView(this).apply {
             this.text = text
             textSize = 16f
-            setTextColor(Color.BLACK) // النص دائماً أسود
+            setTextColor(Color.BLACK)
             setPadding(30, 20, 30, 20)
             
             val bg = GradientDrawable().apply {
