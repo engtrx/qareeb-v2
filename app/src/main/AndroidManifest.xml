@@ -1,12 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     
-    <!-- أذونات البلوتوث للإصدارات القديمة -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
-    
-    <!-- أذونات البلوتوث للإصدارات الحديثة (أندرويد 12 وما فوق) -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
@@ -16,6 +13,7 @@
         android:label="قريب V2"
         android:supportsRtl="true"
         android:theme="@style/Theme.Material3.Light.NoActionBar">
+        
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -24,5 +22,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".ChatActivity"
+            android:exported="false" />
+            
     </application>
 </manifest>
