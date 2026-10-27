@@ -8,12 +8,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      # تحميل الخطوط (Inter و Cairo)
       - name: Download Fonts
         run: |
           mkdir -p app/src/main/assets
           curl -fL -o app/src/main/assets/Inter.ttf "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf"
-          curl -fL -o app/src/main/assets/Cairo.ttf "https://github.com/google/fonts/raw/main/ofl/cairo/Cairo%5Bslnt%2Cwght%5D.ttf"
           
       - uses: actions/setup-java@v4
         with:
@@ -24,7 +22,6 @@ jobs:
         with:
           gradle-version: 8.7
           
-      # بناء التطبيق وتوقيعه رقمياً (Release)
       - name: Build Release APK
         run: |
           keytool -genkey -v -keystore release.keystore -alias mykey -keyalg RSA -keysize 2048 -validity 10000 -storepass password123 -keypass password123 -dname "CN=Qareeb, OU=Dev, O=Qareeb, L=City, S=State, C=US"
@@ -34,7 +31,6 @@ jobs:
             -Pandroid.injected.signing.key.alias=mykey \
             -Pandroid.injected.signing.key.password=password123
             
-      # نشر التطبيق في صفحة Releases
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
