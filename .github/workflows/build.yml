@@ -1,0 +1,43 @@
+name: Build Release APK
+on: [push, workflow_dispatch]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      # تحميل الخطوط (Inter و Cairo)
+      - name: Download Fonts
+        run: |
+          mkdir -p app/src/main/assets
+          curl -fL -o app/src/main/assets/Inter.ttf "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf"
+          curl -fL -o app/src/main/assets/Cairo.ttf "https://github.com/google/fonts/raw/main/ofl/cairo/Cairo%5Bslnt%2Cwght%5D.ttf"
+          
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+          
+      # بناء التطبيق وتوقيعه رقمياً (Release)
+      - name: Build Release APK
+        run: |
+          keytool -genkey -v -keystore release.keystore -alias mykey -keyalg RSA -keysize 2048 -validity 10000 -storepass password123 -keypass password123 -dname "CN=Qareeb, OU=Dev, O=Qareeb, L=City, S=State, C=US"
+          gradle clean assembleRelease \
+            -Pandroid.injected.signing.store.file=$(pwd)/release.keystore \
+            -Pandroid.injected.signing.store.password=password123 \
+            -Pandroid.injected.signing.key.alias=mykey \
+            -Pandroid.injected.signing.key.password=password123
+            
+      # نشر التطبيق في صفحة Releases
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: قريب V2 v${{ github.run_number }}
+          files: app/build/outputs/apk/release/app-release.apk
