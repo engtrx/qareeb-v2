@@ -1,16 +1,18 @@
 package com.engtrx.qareebv2
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothServerSocket
+import android.bluetooth.BluetoothSocket
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
-import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
 import android.widget.ArrayAdapter
@@ -22,6 +24,8 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import java.io.IOException
+import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
 
@@ -30,12 +34,23 @@ class MainActivity : AppCompatActivity() {
     private lateinit var deviceListView: ListView
     private lateinit var deviceListAdapter: ArrayAdapter<String>
     private val discoveredDevices = mutableListOf<String>()
+    private val MY_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+    
+    private var acceptThread: AcceptThread? = null
 
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         if (permissions.values.all { it }) startBluetooth()
-        else statusText.text = "يجب الموافقة على الأذونات ليعمل البحث."
+        else statusText.text = "يجب الموافقة على الأذونات."
+    }
+
+    // طلب جعل الهاتف قابلاً للاكتشاف
+    private val enableDiscoverableLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { 
+        statusText.text = "الهاتف جاهز للاستقبال والبحث."
+        startBluetooth()
     }
 
     private val receiver = object : BroadcastReceiver() {
@@ -58,7 +73,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 BluetoothAdapter.ACTION_DISCOVERY_STARTED -> statusText.text = "جاري البحث..."
-                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> statusText.text = "انتهى البحث. الأجهزة المكتشفة: ${discoveredDevices.size}"
+                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> statusText.text = "انتهى البحث."
             }
         }
     }
@@ -80,7 +95,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         statusText = TextView(this).apply {
-            text = "اضغط على الزر للبحث عن الأجهزة القريبة"
+            text = "جاري تجهيز البلوتوث..."
             textSize = 16f
             setTextColor(Color.parseColor("#666666"))
             textAlignment = TextView.TEXT_ALIGNMENT_CENTER
@@ -89,7 +104,6 @@ class MainActivity : AppCompatActivity() {
 
         val searchButton = Button(this).apply {
             text = "بدء البحث"
-            textSize = 18f
             setBackgroundColor(Color.parseColor("#0088cc"))
             setTextColor(Color.WHITE)
             setOnClickListener { checkPermissionsAndStart() }
@@ -98,13 +112,13 @@ class MainActivity : AppCompatActivity() {
         deviceListAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, discoveredDevices)
         deviceListView = ListView(this).apply {
             adapter = deviceListAdapter
-            setPadding(0, 20, 0, 0)
             setOnItemClickListener { _, _, position, _ ->
                 val info = discoveredDevices[position].split("\n")
                 if (info.size >= 2) {
                     val intent = Intent(this@MainActivity, ChatActivity::class.java).apply {
                         putExtra("DEVICE_ADDRESS", info[1])
                         putExtra("DEVICE_NAME", info[0])
+                        putExtra("IS_SERVER", false) // نحن من يتصل
                     }
                     startActivity(intent)
                 }
@@ -116,6 +130,8 @@ class MainActivity : AppCompatActivity() {
         layout.addView(searchButton)
         layout.addView(deviceListView)
         setContentView(layout)
+
+        checkPermissionsAndStart()
     }
 
     private fun checkPermissionsAndStart() {
@@ -126,19 +142,34 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (permissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
-            startBluetooth()
+            makeDiscoverable()
         } else {
             requestPermissionsLauncher.launch(permissions)
         }
     }
 
-    private fun startBluetooth() {
-        val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        bluetoothAdapter = bluetoothManager.adapter
-        if (bluetoothAdapter == null || bluetoothAdapter?.isEnabled == false) {
-            statusText.text = "البلوتوث غير مدعوم أو مغلق."
+    @SuppressLint("MissingPermission")
+    private fun makeDiscoverable() {
+        bluetoothAdapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        if (bluetoothAdapter?.isEnabled == false) {
+            statusText.text = "الرجاء تشغيل البلوتوث."
             return
         }
+        
+        // بدء خادم الاستقبال في الخلفية
+        if (acceptThread == null) {
+            acceptThread = AcceptThread()
+            acceptThread?.start()
+        }
+
+        val discoverableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
+            putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300) // 5 دقائق
+        }
+        enableDiscoverableLauncher.launch(discoverableIntent)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startBluetooth() {
         val filter = IntentFilter().apply {
             addAction(BluetoothDevice.ACTION_FOUND)
             addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED)
@@ -150,11 +181,49 @@ class MainActivity : AppCompatActivity() {
         bluetoothAdapter?.startDiscovery()
     }
 
+    // خيط الاستقبال (Server)
+    private inner class AcceptThread : Thread() {
+        private val mmServerSocket: BluetoothServerSocket? by lazy(LazyThreadSafetyMode.NONE) {
+            bluetoothAdapter?.listenUsingRfcommWithServiceRecord("Qareeb", MY_UUID)
+        }
+
+        @SuppressLint("MissingPermission")
+        override fun run() {
+            var shouldLoop = true
+            while (shouldLoop) {
+                val socket: BluetoothSocket? = try {
+                    mmServerSocket?.accept()
+                } catch (e: IOException) {
+                    shouldLoop = false
+                    null
+                }
+                socket?.let {
+                    // تم استلام اتصال!
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "تم استلام طلب دردشة!", Toast.LENGTH_LONG).show()
+                        val intent = Intent(this@MainActivity, ChatActivity::class.java).apply {
+                            putExtra("DEVICE_ADDRESS", it.remoteDevice.address)
+                            putExtra("DEVICE_NAME", it.remoteDevice.name ?: "جهاز")
+                            putExtra("IS_SERVER", true) // نحن المستقبل
+                        }
+                        startActivity(intent)
+                    }
+                    break
+                }
+            }
+        }
+
+        fun cancel() {
+            try { mmServerSocket?.close() } catch (e: IOException) {}
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         try {
             unregisterReceiver(receiver)
             bluetoothAdapter?.cancelDiscovery()
+            acceptThread?.cancel()
         } catch (e: Exception) {}
     }
 }
