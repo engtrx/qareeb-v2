@@ -61,10 +61,13 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         @Suppress("DEPRECATION") intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                     }
+                    
+                    // إصلاح اسم الجهاز: نقرأ الاسم من الـ Intent مباشرة
+                    val deviceName = intent.getStringExtra(BluetoothDevice.EXTRA_NAME) ?: device?.name ?: "جهاز غير معروف"
+                    
                     device?.let {
-                        val name = it.name ?: "جهاز غير معروف"
                         val mac = it.address
-                        val displayString = "$name\n$mac"
+                        val displayString = "$deviceName\n$mac"
                         if (!discoveredDevices.contains(displayString)) {
                             discoveredDevices.add(displayString)
                             deviceListAdapter.notifyDataSetChanged()
@@ -195,8 +198,9 @@ class MainActivity : AppCompatActivity() {
                     null
                 }
                 
-                // إصلاح الخطأ هنا: استبدلنا break بـ if
                 if (socket != null) {
+                    // نمرر الـ Socket لشاشة الدردشة
+                    ChatActivity.serverSocket = socket
                     runOnUiThread {
                         Toast.makeText(this@MainActivity, "تم استلام طلب دردشة!", Toast.LENGTH_LONG).show()
                         val intent = Intent(this@MainActivity, ChatActivity::class.java).apply {
