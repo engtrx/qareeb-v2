@@ -45,7 +45,6 @@ class MainActivity : AppCompatActivity() {
         else statusText.text = "يجب الموافقة على الأذونات."
     }
 
-    // طلب جعل الهاتف قابلاً للاكتشاف
     private val enableDiscoverableLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { 
@@ -118,7 +117,7 @@ class MainActivity : AppCompatActivity() {
                     val intent = Intent(this@MainActivity, ChatActivity::class.java).apply {
                         putExtra("DEVICE_ADDRESS", info[1])
                         putExtra("DEVICE_NAME", info[0])
-                        putExtra("IS_SERVER", false) // نحن من يتصل
+                        putExtra("IS_SERVER", false)
                     }
                     startActivity(intent)
                 }
@@ -156,14 +155,13 @@ class MainActivity : AppCompatActivity() {
             return
         }
         
-        // بدء خادم الاستقبال في الخلفية
         if (acceptThread == null) {
             acceptThread = AcceptThread()
             acceptThread?.start()
         }
 
         val discoverableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
-            putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300) // 5 دقائق
+            putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
         }
         enableDiscoverableLauncher.launch(discoverableIntent)
     }
@@ -181,7 +179,6 @@ class MainActivity : AppCompatActivity() {
         bluetoothAdapter?.startDiscovery()
     }
 
-    // خيط الاستقبال (Server)
     private inner class AcceptThread : Thread() {
         private val mmServerSocket: BluetoothServerSocket? by lazy(LazyThreadSafetyMode.NONE) {
             bluetoothAdapter?.listenUsingRfcommWithServiceRecord("Qareeb", MY_UUID)
@@ -197,18 +194,19 @@ class MainActivity : AppCompatActivity() {
                     shouldLoop = false
                     null
                 }
-                socket?.let {
-                    // تم استلام اتصال!
+                
+                // إصلاح الخطأ هنا: استبدلنا break بـ if
+                if (socket != null) {
                     runOnUiThread {
                         Toast.makeText(this@MainActivity, "تم استلام طلب دردشة!", Toast.LENGTH_LONG).show()
                         val intent = Intent(this@MainActivity, ChatActivity::class.java).apply {
-                            putExtra("DEVICE_ADDRESS", it.remoteDevice.address)
-                            putExtra("DEVICE_NAME", it.remoteDevice.name ?: "جهاز")
-                            putExtra("IS_SERVER", true) // نحن المستقبل
+                            putExtra("DEVICE_ADDRESS", socket.remoteDevice.address)
+                            putExtra("DEVICE_NAME", socket.remoteDevice.name ?: "جهاز")
+                            putExtra("IS_SERVER", true)
                         }
                         startActivity(intent)
                     }
-                    break
+                    shouldLoop = false
                 }
             }
         }
