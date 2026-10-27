@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
 import android.widget.ArrayAdapter
@@ -30,19 +31,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var deviceListAdapter: ArrayAdapter<String>
     private val discoveredDevices = mutableListOf<String>()
 
-    // طلب أذونات البلوتوث
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val allGranted = permissions.values.all { it }
-        if (allGranted) {
-            startBluetooth()
-        } else {
-            statusText.text = "يجب الموافقة على الأذونات ليعمل البحث."
-        }
+        if (permissions.values.all { it }) startBluetooth()
+        else statusText.text = "يجب الموافقة على الأذونات ليعمل البحث."
     }
 
-    // المستقبل (Receiver) الذي يلتقط الأجهزة التي يتم العثور عليها
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
@@ -50,35 +45,26 @@ class MainActivity : AppCompatActivity() {
                     val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
                     } else {
-                        @Suppress("DEPRECATION")
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                        @Suppress("DEPRECATION") intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                     }
-
-                    if (device != null) {
-                        val deviceName = device.name ?: "جهاز غير معروف"
-                        val deviceMac = device.address
-                        val displayString = "$deviceName\n$deviceMac"
-                        
-                        // إضافة الجهاز للقائمة إذا لم يكن موجوداً مسبقاً
+                    device?.let {
+                        val name = it.name ?: "جهاز غير معروف"
+                        val mac = it.address
+                        val displayString = "$name\n$mac"
                         if (!discoveredDevices.contains(displayString)) {
                             discoveredDevices.add(displayString)
                             deviceListAdapter.notifyDataSetChanged()
                         }
                     }
                 }
-                BluetoothAdapter.ACTION_DISCOVERY_STARTED -> {
-                    statusText.text = "جاري البحث الفعلي... الرجاء الانتظار."
-                }
-                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
-                    statusText.text = "انتهى البحث. تم العثور على ${discoveredDevices.size} جهاز."
-                }
+                BluetoothAdapter.ACTION_DISCOVERY_STARTED -> statusText.text = "جاري البحث..."
+                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> statusText.text = "انتهى البحث. الأجهزة المكتشفة: ${discoveredDevices.size}"
             }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(40, 80, 40, 40)
@@ -94,7 +80,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         statusText = TextView(this).apply {
-            text = "اضغط على الزر بالأسفل للبحث."
+            text = "اضغط على الزر للبحث عن الأجهزة القريبة"
             textSize = 16f
             setTextColor(Color.parseColor("#666666"))
             textAlignment = TextView.TEXT_ALIGNMENT_CENTER
@@ -102,26 +88,33 @@ class MainActivity : AppCompatActivity() {
         }
 
         val searchButton = Button(this).apply {
-            text = "البحث عن الأجهزة"
+            text = "بدء البحث"
             textSize = 18f
             setBackgroundColor(Color.parseColor("#0088cc"))
             setTextColor(Color.WHITE)
-            setOnClickListener {
-                checkPermissionsAndStart()
-            }
+            setOnClickListener { checkPermissionsAndStart() }
         }
 
         deviceListAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, discoveredDevices)
         deviceListView = ListView(this).apply {
             adapter = deviceListAdapter
             setPadding(0, 20, 0, 0)
+            setOnItemClickListener { _, _, position, _ ->
+                val info = discoveredDevices[position].split("\n")
+                if (info.size >= 2) {
+                    val intent = Intent(this@MainActivity, ChatActivity::class.java).apply {
+                        putExtra("DEVICE_ADDRESS", info[1])
+                        putExtra("DEVICE_NAME", info[0])
+                    }
+                    startActivity(intent)
+                }
+            }
         }
 
         layout.addView(title)
         layout.addView(statusText)
         layout.addView(searchButton)
         layout.addView(deviceListView)
-
         setContentView(layout)
     }
 
@@ -132,11 +125,7 @@ class MainActivity : AppCompatActivity() {
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         }
 
-        val hasPermission = permissions.all {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-        }
-
-        if (hasPermission) {
+        if (permissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
             startBluetooth()
         } else {
             requestPermissionsLauncher.launch(permissions)
@@ -146,43 +135,26 @@ class MainActivity : AppCompatActivity() {
     private fun startBluetooth() {
         val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager.adapter
-
-        if (bluetoothAdapter == null) {
-            statusText.text = "الجهاز لا يدعم البلوتوث."
+        if (bluetoothAdapter == null || bluetoothAdapter?.isEnabled == false) {
+            statusText.text = "البلوتوث غير مدعوم أو مغلق."
             return
         }
-
-        if (bluetoothAdapter?.isEnabled == false) {
-            statusText.text = "البلوتوث مغلق. يرجى تشغيله."
-            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            startActivityForResult(enableBtIntent, 1)
-            return
-        }
-
-        // إعداد المستقبل لبدء استقبال الأجهزة
         val filter = IntentFilter().apply {
             addAction(BluetoothDevice.ACTION_FOUND)
             addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED)
             addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
         }
         registerReceiver(receiver, filter)
-
-        // مسح القائمة القديمة وبدء بحث جديد
         discoveredDevices.clear()
         deviceListAdapter.notifyDataSetChanged()
-        
-        Toast.makeText(this, "بدأ البحث الفعلي...", Toast.LENGTH_SHORT).show()
         bluetoothAdapter?.startDiscovery()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // إيقاف البحث وإلغاء تسجيل المستقبل عند إغلاق التطبيق لتوفير البطارية
         try {
             unregisterReceiver(receiver)
             bluetoothAdapter?.cancelDiscovery()
-        } catch (e: Exception) {
-            // تجاهل الخطأ إذا لم يكن مسجلاً
-        }
+        } catch (e: Exception) {}
     }
 }
